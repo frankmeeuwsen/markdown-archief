@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archief zoeken</title>
+<style>
+:root {
+  --bg: #f6f5f1; --paneel: #ffffff; --tekst: #1d1c1a; --zacht: #6b6862; --lijn: #e3e0d8;
+  --accent: #1f5f5b; --accent-zacht: #e4efed; --mark: #fbe7a1; --rood: #a33b2b; --oranje: #9a6a12;
+  --schaduw: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --paneel: #1f1f1d; --tekst: #e9e7e1; --zacht: #9d998f; --lijn: #33322f;
+    --accent: #7cc3bb; --accent-zacht: #1f3331; --mark: #5c4a12; --rood: #e38b7c; --oranje: #d9ae5c;
+    --schaduw: none; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--tekst);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+header { padding: 28px 24px 16px; max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 18px; font-weight: 600; margin: 0 0 14px; letter-spacing: -.01em; }
+h1 span { color: var(--zacht); font-weight: 400; font-size: 14px; margin-left: 8px; }
+.zoekrij { display: flex; gap: 10px; flex-wrap: wrap; }
+.zoekveld { flex: 1 1 360px; position: relative; }
+.zoekveld input {
+  width: 100%; font: inherit; font-size: 17px; padding: 12px 44px 12px 16px;
+  background: var(--paneel); color: var(--tekst); border: 1px solid var(--lijn); border-radius: 10px;
+  box-shadow: var(--schaduw); outline: none;
+}
+.zoekveld input:focus { border-color: var(--accent); }
+.zoekveld kbd {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font: 12px ui-monospace, Menlo, monospace; color: var(--zacht);
+  border: 1px solid var(--lijn); border-radius: 4px; padding: 1px 6px;
+}
+select {
+  font: inherit; padding: 0 12px; height: 48px; border-radius: 10px; border: 1px solid var(--lijn);
+  background: var(--paneel); color: var(--tekst); min-width: 140px;
+}
+.status { color: var(--zacht); font-size: 13px; margin-top: 10px; min-height: 20px; }
+.status .fout { color: var(--rood); }
+details.hulp { font-size: 13px; color: var(--zacht); margin-top: 4px; }
+details.hulp summary { cursor: pointer; }
+details.hulp code { background: var(--accent-zacht); color: var(--tekst); padding: 0 4px; border-radius: 3px; }
+
+main {
+  max-width: 1400px; margin: 0 auto; padding: 0 24px 24px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px;
+}
+main.open { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+#resultaten { list-style: none; margin: 0; padding: 0; }
+#resultaten li {
+  background: var(--paneel); border: 1px solid var(--lijn); border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 8px; cursor: pointer;
+}
+#resultaten li:hover, #resultaten li.actief { border-color: var(--accent); }
+#resultaten li.actief { box-shadow: inset 3px 0 0 var(--accent); }
+.titel { font-weight: 600; overflow-wrap: anywhere; }
+.pad { color: var(--zacht); font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.fragment { margin-top: 6px; font-size: 14px; color: var(--tekst); overflow-wrap: anywhere; }
+mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+.labels { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.label { font-size: 11.5px; padding: 1px 8px; border-radius: 99px; background: var(--accent-zacht); color: var(--accent); }
+.label.k-slecht, .label.k-leeg, .label.k-mislukt { background: transparent; color: var(--rood); border: 1px solid currentColor; }
+.label.k-matig { background: transparent; color: var(--oranje); border: 1px solid currentColor; }
+#meer { width: 100%; font: inherit; padding: 10px; border-radius: 10px; border: 1px dashed var(--lijn); background: none; color: var(--accent); cursor: pointer; }
+.leeg { color: var(--zacht); padding: 30px 4px; }
+
+#lezer {
+  display: none; background: var(--paneel); border: 1px solid var(--lijn); border-radius: 10px;
+  position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; box-shadow: var(--schaduw);
+}
+main.open #lezer { display: block; }
+.lezer-kop {
+  position: sticky; top: 0; background: var(--paneel); border-bottom: 1px solid var(--lijn);
+  padding: 12px 16px; display: flex; gap: 12px; align-items: flex-start; z-index: 1;
+}
+.lezer-kop .wat { flex: 1; min-width: 0; }
+.lezer-kop button, .lezer-kop a {
+  font: inherit; font-size: 13px; border: 1px solid var(--lijn); background: none; color: var(--tekst);
+  border-radius: 8px; padding: 4px 10px; cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+.lezer-kop .knoppen { display: flex; gap: 6px; }
+.treffers { font-size: 12.5px; color: var(--zacht); }
+.meta { font-size: 12.5px; color: var(--zacht); padding: 10px 16px 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
+.meta dd { margin: 0; overflow-wrap: anywhere; }
+.meta dt { color: var(--zacht); }
+.inhoud { padding: 8px 20px 24px; overflow-wrap: anywhere; }
+.inhoud h1, .inhoud h2, .inhoud h3 { line-height: 1.25; }
+.inhoud h1 { font-size: 1.4em; } .inhoud h2 { font-size: 1.2em; } .inhoud h3 { font-size: 1.05em; }
+.inhoud table { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.inhoud td, .inhoud th { border: 1px solid var(--lijn); padding: 3px 8px; vertical-align: top; }
+.inhoud pre { background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12.5px; }
+.inhoud code { font-family: ui-monospace, Menlo, monospace; }
+.inhoud img { display: none; }
+.melding { margin: 12px 16px 0; padding: 8px 12px; border-radius: 8px; background: var(--accent-zacht); font-size: 13px; }
+mark.huidig { outline: 2px solid var(--accent); }
+
+@media (max-width: 860px) {
+  header { padding: 18px 16px 10px; }
+  main { padding: 0 16px 16px; }
+  main.open { grid-template-columns: 1fr; }
+  main.open #lezer { position: fixed; inset: 0; max-height: none; border-radius: 0; z-index: 10; }
+  select { flex: 1 1 140px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Archief zoeken <span id="info"></span></h1>
+  <div class="zoekrij">
+    <div class="zoekveld">
+      <input id="q" type="search" placeholder="Zoek in alle documenten" autocomplete="off" autofocus aria-label="Zoekterm">
+      <kbd>/</kbd>
+    </div>
+    <select id="type" aria-label="Type"><option value="">Alle typen</option></select>
+    <select id="kwaliteit" aria-label="Kwaliteit"><option value="">Alle kwaliteit</option></select>
+  </div>
+  <div class="status" id="status"></div>
+  <details class="hulp">
+    <summary>Zo zoek je</summary>
+    <p>
+      <code>klimaat beleid</code> beide woorden &middot;
+      <code>"vaste zin"</code> precies deze woorden &middot;
+      <code>archi*</code> woorden die zo beginnen &middot;
+      <code>-concept</code> zonder dit woord &middot;
+      <code>fema OF nasa</code> een van beide.
+      Hoofdletters en accenten maken niet uit: <code>cafe</code> vindt ook café.
+    </p>
+  </details>
+</header>
+
+<main id="main">
+  <section>
+    <ul id="resultaten"></ul>
+    <button id="meer" hidden>Meer resultaten</button>
+  </section>
+  <article id="lezer" aria-live="polite"></article>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const q = $("#q"), typeSel = $("#type"), kwSel = $("#kwaliteit");
+const lijst = $("#resultaten"), status = $("#status"), meer = $("#meer"), lezer = $("#lezer"), main = $("#main");
+let offset = 0, laatste = "", timer = null, actiefId = null, heeftBron = false;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n.toLocaleString("nl-NL");
+
+async function laadInfo() {
+  const r = await (await fetch("/api/info")).json();
+  heeftBron = r.bron;
+  $("#info").textContent = `${fmt(r.totaal)} documenten · geïndexeerd ${r.geindexeerd}`;
+  for (const [v, n] of r.types) typeSel.add(new Option(`${v || "onbekend"} (${n})`, v));
+  for (const [v, n] of r.kwaliteit) kwSel.add(new Option(`${v || "onbekend"} (${n})`, v));
+}
+
+function leesUrl() {
+  const p = new URLSearchParams(location.search);
+  q.value = p.get("q") || ""; typeSel.value = p.get("type") || ""; kwSel.value = p.get("kwaliteit") || "";
+}
+function schrijfUrl() {
+  const p = new URLSearchParams();
+  if (q.value.trim()) p.set("q", q.value.trim());
+  if (typeSel.value) p.set("type", typeSel.value);
+  if (kwSel.value) p.set("kwaliteit", kwSel.value);
+  history.replaceState(null, "", p.toString() ? "?" + p : location.pathname);
+}
+
+async function zoek(volgende = false) {
+  const sleutel = [q.value, typeSel.value, kwSel.value].join("\u0001");
+  if (!volgende) { offset = 0; laatste = sleutel; }
+  schrijfUrl();
+  if (!q.value.trim()) {
+    lijst.innerHTML = ""; meer.hidden = true;
+    status.textContent = "Typ een zoekterm. Druk op / om hier te komen.";
+    return;
+  }
+  const p = new URLSearchParams({ q: q.value, type: typeSel.value, kwaliteit: kwSel.value, offset, limit: 30 });
+  const r = await (await fetch("/api/zoek?" + p)).json();
+  if (sleutel !== laatste) return;              // oude zoekopdracht, intussen verder getypt
+  if (r.fout) { status.innerHTML = `<span class="fout">${esc(r.fout)}</span>`; lijst.innerHTML = ""; meer.hidden = true; return; }
+  status.textContent = r.totaal
+    ? `${fmt(r.totaal)} ${r.totaal === 1 ? "document" : "documenten"} · ${r.ms} ms`
+    : "Niets gevonden.";
+  if (!volgende) lijst.innerHTML = "";
+  for (const d of r.resultaten) {
+    const li = document.createElement("li");
+    li.dataset.id = d.id;
+    if (d.id === actiefId) li.classList.add("actief");
+    li.innerHTML = `
+      <div class="titel">${esc(d.titel)}</div>
+      <div class="pad">${esc(d.pad)}</div>
+      ${d.fragment ? `<div class="fragment">${d.fragment}</div>` : ""}
+      <div class="labels">
+        ${d.type ? `<span class="label">${esc(d.type)}</span>` : ""}
+        ${d.kwaliteit ? `<span class="label k-${esc(d.kwaliteit)}">${esc(d.kwaliteit)}</span>` : ""}
+        <span class="label">${fmt(d.tekens)} tekens</span>
+      </div>`;
+    li.addEventListener("click", () => open(d.id));
+    lijst.append(li);
+  }
+  offset += r.resultaten.length;
+  meer.hidden = offset >= r.totaal;
+}
+
+function zoektermen() {
+  return (q.value.match(/"[^"]+"|\S+/g) || [])
+    .filter(t => !t.startsWith("-") && !/^(OR|OF)$/i.test(t))
+    .map(t => t.replace(/^"|"$/g, "").replace(/\*$/, ""))
+    .filter(t => t.length >= 2);
+}
+const normaal = s => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+function markeer(root) {
+  const termen = zoektermen().map(normaal);
+  if (!termen.length) return [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  const marks = [];
+  for (const node of nodes) {
+    const tekst = node.nodeValue, n = normaal(tekst);
+    if (n.length !== tekst.length) continue;   // zeldzaam: lengte verandert bij normaliseren
+    const hits = [];
+    for (const t of termen) { let i = 0; while ((i = n.indexOf(t, i)) !== -1) { hits.push([i, i + t.length]); i += t.length; } }
+    if (!hits.length) continue;
+    hits.sort((a, b) => a[0] - b[0]);
+    const frag = document.createDocumentFragment(); let pos = 0;
+    for (const [s, e] of hits) {
+      if (s < pos) continue;
+      frag.append(tekst.slice(pos, s));
+      const m = document.createElement("mark"); m.textContent = tekst.slice(s, e); frag.append(m); marks.push(m);
+      pos = e;
+    }
+    frag.append(tekst.slice(pos));
+    node.replaceWith(frag);
+  }
+  return marks;
+}
+
+async function open(id) {
+  actiefId = id;
+  document.querySelectorAll("#resultaten li").forEach(li => li.classList.toggle("actief", +li.dataset.id === id));
+  main.classList.add("open");
+  lezer.innerHTML = `<div class="melding">Laden…</div>`;
+  const d = await (await fetch("/api/doc?id=" + id)).json();
+  const meta = Object.entries(d.meta).filter(([k]) => k !== "sha256")
+    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  lezer.innerHTML = `
+    <div class="lezer-kop">
+      <div class="wat"><div class="titel">${esc(d.titel)}</div><div class="treffers" id="treffers"></div></div>
+      <div class="knoppen">
+        <button id="vorige" title="Vorige treffer">↑</button>
+        <button id="volgende" title="Volgende treffer">↓</button>
+        ${d.bron ? `<a href="/origineel?id=${id}" target="_blank" rel="noopener">Origineel</a>` : ""}
+        <button id="sluit" title="Sluiten (Esc)">Sluiten</button>
+      </div>
+    </div>
+    <dl class="meta">${meta}</dl>
+    ${d.ingekort ? `<div class="melding">Dit document is erg groot. Hier staat het begin; de zoekindex bevat wel alles.</div>` : ""}
+    <div class="inhoud">${d.html}</div>`;
+  lezer.scrollTop = 0;
+  const marks = markeer(lezer.querySelector(".inhoud"));
+  let i = -1;
+  const ga = stap => {
+    if (!marks.length) return;
+    marks[i]?.classList.remove("huidig");
+    i = (i + stap + marks.length) % marks.length;
+    marks[i].classList.add("huidig");
+    marks[i].scrollIntoView({ block: "center" });
+    $("#treffers").textContent = `treffer ${i + 1} van ${marks.length}`;
+  };
+  $("#treffers").textContent = marks.length ? `${marks.length} treffers in de tekst` : "";
+  $("#volgende").onclick = () => ga(1);
+  $("#vorige").onclick = () => ga(-1);
+  $("#sluit").onclick = sluit;
+  if (marks.length) ga(1);
+}
+function sluit() {
+  main.classList.remove("open"); lezer.innerHTML = ""; actiefId = null;
+  document.querySelectorAll("#resultaten li.actief").forEach(li => li.classList.remove("actief"));
+}
+
+q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => zoek(), 150); });
+typeSel.addEventListener("change", () => zoek());
+kwSel.addEventListener("change", () => zoek());
+meer.addEventListener("click", () => zoek(true));
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); q.select(); }
+  if (e.key === "Escape" && main.classList.contains("open")) sluit();
+});
+
+laadInfo().then(() => { leesUrl(); zoek(); });
+</script>
+</body>
+</html>

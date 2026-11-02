@@ -1,0 +1,12 @@
+# Alleen de scripts en documentatie horen in deze repository.
+# Bronbestanden, uitvoer en de zoekindex blijven lokaal (privé en te groot).
+/*
+!/.gitignore
+!/README.md
+!/conversie/
+!/20261102 - plan conversie naar markdown.md
+
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
