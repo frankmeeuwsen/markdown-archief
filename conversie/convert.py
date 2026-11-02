@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import unicodedata
 import urllib.error
 import urllib.request
@@ -146,13 +147,16 @@ def detect(path: Path) -> str:
 # ================================================================ hulpfuncties
 
 def run(cmd: list[str], timeout: int = 180) -> str:
-    # Altijd UTF-8: Windows gebruikt anders cp1252 en verminkt dan é, ë, € enzovoort.
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    # Uitvoer als bytes ophalen en zelf als UTF-8 lezen. Laat je Python dat doen, dan gebruikt
+    # Windows cp1252; bij een onbekend teken crasht dan het leesproces en krijg je stil None terug.
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    out = (r.stdout or b"").decode("utf-8", errors="replace")
+    err_all = (r.stderr or b"").decode("utf-8", errors="replace")
     if r.returncode != 0:
         # Fontconfig-waarschuwingen van LibreOffice zijn ruis, de echte fout staat erna.
-        err = "\n".join(l for l in r.stderr.splitlines() if not l.startswith("Fontconfig"))
+        err = "\n".join(l for l in err_all.splitlines() if not l.startswith("Fontconfig"))
         raise RuntimeError(err.strip()[:300] or f"exit {r.returncode}")
-    return r.stdout
+    return out
 
 
 def read_text(path: Path) -> str:
@@ -566,6 +570,8 @@ def tidy(text: str) -> str:
     """Kleine, veilige schoonmaak die voor elk resultaat geldt: regeleinden gelijktrekken en
     onzichtbare tekens die woorden aan elkaar plakken (vertical tab uit PowerPoint/Word,
     form feed uit PDF, nul-bytes) vervangen door een regeleinde of weghalen."""
+    if not isinstance(text, str):
+        return ""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\x0b", "\n").replace("\x0c", "\n").replace("\x00", "")
     return re.sub(r"\n{4,}", "\n\n\n", text)
@@ -578,8 +584,10 @@ def convert_one(src: Path, kind: str) -> tuple[str | None, str, str, float | str
     for conv in CHAINS.get(kind, [c_raw_strings]):
         try:
             text = conv(src)
+            if not isinstance(text, str):
+                raise RuntimeError(f"gaf geen tekst terug ({type(text).__name__})")
         except Exception as e:  # noqa: BLE001
-            errors.append(f"{conv.__name__[2:]}: {e}")
+            errors.append(f"{conv.__name__[2:]}: {type(e).__name__}: {e}")
             continue
         if kind not in DATA:
             text = tidy(text)
@@ -616,6 +624,13 @@ def main() -> None:
                     help="audio/video transcriberen (tiny, base, small, medium, large-v3)")
     a = ap.parse_args()
     Cfg.vision, Cfg.whisper = a.vision, a.whisper
+    # Bestandsnamen met vreemde tekens mogen het printen naar de console nooit laten crashen
+    # (op Windows is de console of een logbestand vaak cp1252).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
 
     if not a.bron.is_dir():
         sys.exit(f"Bronmap niet gevonden: {a.bron.resolve()}")
@@ -632,51 +647,112 @@ def main() -> None:
 
     seen: dict[str, Path] = {}
     rows = []
-    for i, src in enumerate(files, 1):
-        sha = hashlib.sha256(src.read_bytes()).hexdigest()
-        kind = detect(src)
-        rel = src.relative_to(a.bron)
-        row = {"bron": rel.as_posix(), "type": kind, "sha256": sha[:16], "converter": "",
-               "kwaliteit": "", "score": "", "tekens": 0, "llm": "", "fout": ""}
-        print(f"[{i}/{len(files)}] {kind:12} {rel}", file=sys.stderr)
-
-        if sha in seen:
-            row.update(kwaliteit="duplicaat", fout=f"zelfde als {seen[sha].relative_to(a.bron)}")
-            rows.append(row)
-            continue
-        seen[sha] = src
-        if a.dry_run:
-            rows.append(row)
-            continue
-
-        text, name, status, score, errors = convert_one(src, kind)
-        extra: dict = {}
-
-        # Vision: afbeeldingen altijd, PDF's alleen als tekst en OCR niets bruikbaars gaven.
-        if a.vision and (kind in BEELD or (kind == "pdf" and status in QUARANTAINE)):
+    foutlog = a.doel / "_fouten.log"
+    afgebroken = False
+    try:
+        for i, src in enumerate(files, 1):
+            rel = src.relative_to(a.bron)
+            print(f"[{i}/{len(files)}] {rel}", file=sys.stderr)
             try:
-                if kind in BEELD:
-                    ocr = (text or "").strip()
-                    text = vision_image(src, a.vision)
-                    if ocr:
-                        text += f"\n\n## OCR (Tesseract)\n\n{ocr}\n"
-                    name, status, score = (name + "+vision").lstrip("+"), "beschreven", ""
-                    extra["beschrijving"] = f"gegenereerd door {a.vision}, niet gecontroleerd"
-                else:
-                    text = vision_pdf(src, a.vision)
-                    status, score = quality(text)
-                    name = "vision"
-                    extra["transcriptie"] = f"gegenereerd door {a.vision}, niet gecontroleerd"
-            except Exception as e:  # noqa: BLE001
-                errors.append(f"vision: {e}")
+                rows.append(process_file(src, rel, a, seen, vergelijk_dir))
+            except Exception as e:  # noqa: BLE001  vangnet: één bestand mag de run nooit stoppen
+                melding = f"{type(e).__name__}: {e}"
+                print(f"    FOUT, overgeslagen: {melding} (details in {foutlog.name})", file=sys.stderr)
+                with open(foutlog, "a", encoding="utf-8") as f:
+                    f.write(f"=== {datetime.now():%Y-%m-%d %H:%M:%S}  {rel.as_posix()}\n")
+                    f.write(traceback.format_exc() + "\n")
+                rows.append({"bron": rel.as_posix(), "type": "", "sha256": "", "converter": "",
+                             "kwaliteit": "mislukt", "score": "", "tekens": 0, "llm": "",
+                             "fout": f"onverwachte fout: {melding}"[:500]})
+    except KeyboardInterrupt:
+        afgebroken = True
+        print("\nAfgebroken met Ctrl+C. Manifest wordt geschreven voor wat al klaar is.", file=sys.stderr)
+    finally:
+        write_reports(a, rows, foutlog, vergelijk_dir, afgebroken)
+    if afgebroken:
+        sys.exit(130)   # foutcode, zodat bijvoorbeeld '&& zoek.py index' niet doorloopt
 
-        if text is None:
-            row.update(kwaliteit=status, fout=" | ".join(errors)[:500])
-            rows.append(row)
-            continue
 
-        # Tekstmodel: alleen voor documenten, nooit voor data, beeld of media.
-        if kind in DOCUMENT and (a.llm_vergelijk or (a.llm and (status == "matig" or name in {"raw_strings", "docx_repair"}))):
+def _write_csv(f, rows: list[dict]) -> None:
+    w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+    w.writeheader()
+    w.writerows(rows)
+
+
+def write_reports(a, rows: list[dict], foutlog: Path, vergelijk_dir: Path, afgebroken: bool) -> None:
+    if not rows:
+        return
+    bad = [r["bron"] for r in rows if r["kwaliteit"] in QUARANTAINE]
+    for naam, schrijf in (
+        ("manifest.csv", lambda f: _write_csv(f, rows)),
+        ("_quarantaine.txt", lambda f: f.write("\n".join(bad) + ("\n" if bad else ""))),
+    ):
+        doel = a.doel / naam
+        try:
+            with open(doel, "w", newline="", encoding="utf-8") as f:
+                schrijf(f)
+        except OSError as e:
+            # Bijvoorbeeld: manifest.csv staat nog open in Excel (Windows vergrendelt hem dan).
+            alt = doel.with_name(f"{doel.stem}-{datetime.now():%Y%m%d-%H%M%S}{doel.suffix}")
+            print(f"Kon {naam} niet schrijven ({e}). Opgeslagen als {alt.name}.", file=sys.stderr)
+            with open(alt, "w", newline="", encoding="utf-8") as f:
+                schrijf(f)
+
+    print("\nResultaat:", dict(Counter(r["kwaliteit"] or "geïnventariseerd" for r in rows)), file=sys.stderr)
+    llm_rows = [r for r in rows if r["llm"]]
+    if llm_rows:
+        print(f"Langs het taalmodel: {len(llm_rows)} bestanden. Zie kolom 'llm' in manifest.csv.", file=sys.stderr)
+    if a.llm_vergelijk:
+        print(f"Vergelijkingsversies staan in: {vergelijk_dir}", file=sys.stderr)
+    onverwacht = sum(1 for r in rows if str(r.get("fout", "")).startswith("onverwachte fout"))
+    if onverwacht:
+        print(f"Let op: {onverwacht} bestand(en) gaven een onverwachte fout. Zie {foutlog}", file=sys.stderr)
+    if afgebroken:
+        print("De run is niet afgemaakt.", file=sys.stderr)
+
+
+def process_file(src: Path, rel: Path, a, seen: dict, vergelijk_dir: Path) -> dict:
+    """Verwerk één bestand en geef de manifestregel terug. Fouten gaan naar de aanroeper."""
+    sha = hashlib.sha256(src.read_bytes()).hexdigest()
+    kind = detect(src)
+    row = {"bron": rel.as_posix(), "type": kind, "sha256": sha[:16], "converter": "",
+           "kwaliteit": "", "score": "", "tekens": 0, "llm": "", "fout": ""}
+
+    if sha in seen:
+        row.update(kwaliteit="duplicaat", fout=f"zelfde als {seen[sha].relative_to(a.bron).as_posix()}")
+        return row
+    seen[sha] = src
+    if a.dry_run:
+        return row
+
+    text, name, status, score, errors = convert_one(src, kind)
+    extra: dict = {}
+
+    # Vision: afbeeldingen altijd, PDF's alleen als tekst en OCR niets bruikbaars gaven.
+    if a.vision and (kind in BEELD or (kind == "pdf" and status in QUARANTAINE)):
+        try:
+            if kind in BEELD:
+                ocr = (text or "").strip()
+                text = vision_image(src, a.vision)
+                if ocr:
+                    text += f"\n\n## OCR (Tesseract)\n\n{ocr}\n"
+                name, status, score = (name + "+vision").lstrip("+"), "beschreven", ""
+                extra["beschrijving"] = f"gegenereerd door {a.vision}, niet gecontroleerd"
+            else:
+                text = vision_pdf(src, a.vision)
+                status, score = quality(text)
+                name = "vision"
+                extra["transcriptie"] = f"gegenereerd door {a.vision}, niet gecontroleerd"
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"vision: {type(e).__name__}: {e}")
+
+    if text is None:
+        row.update(kwaliteit=status, fout=" | ".join(errors)[:500])
+        return row
+
+    # Tekstmodel: alleen voor documenten, nooit voor data, beeld of media.
+    if kind in DOCUMENT and (a.llm_vergelijk or (a.llm and (status == "matig" or name in {"raw_strings", "docx_repair"}))):
+        try:
             new, stats = llm_cleanup(text, a.model)
             row["llm"] = ", ".join(f"{k} {v}" for k, v in stats.items())
             if a.llm_vergelijk:
@@ -687,29 +763,17 @@ def main() -> None:
                 text = new
                 name += "+llm"
                 status, score = quality(text)
+        except Exception as e:  # noqa: BLE001  modelfout: gewoon de versie zonder model houden
+            errors.append(f"llm: {type(e).__name__}: {e}")
 
-        out = (a.doel / rel).with_suffix(".md")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        fm = {"bron": rel.as_posix(), "sha256": sha, "type": kind, "converter": name,
-              "kwaliteit": status, **extra, "geconverteerd": f"{datetime.now():%Y-%m-%d}"}
-        out.write_text(frontmatter(fm) + text, "utf-8")
-        row.update(converter=name, kwaliteit=status, score=score, tekens=len(text),
-                   fout=" | ".join(errors)[:500])
-        rows.append(row)
-
-    with open(a.doel / "manifest.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        w.writerows(rows)
-    bad = [r["bron"] for r in rows if r["kwaliteit"] in QUARANTAINE]
-    (a.doel / "_quarantaine.txt").write_text("\n".join(bad) + ("\n" if bad else ""), "utf-8")
-
-    print("\nResultaat:", dict(Counter(r["kwaliteit"] or "geïnventariseerd" for r in rows)), file=sys.stderr)
-    llm_rows = [r for r in rows if r["llm"]]
-    if llm_rows:
-        print(f"Langs het taalmodel: {len(llm_rows)} bestanden. Zie kolom 'llm' in manifest.csv.", file=sys.stderr)
-    if a.llm_vergelijk:
-        print(f"Vergelijkingsversies staan in: {vergelijk_dir}", file=sys.stderr)
+    out = (a.doel / rel).with_suffix(".md")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fm = {"bron": rel.as_posix(), "sha256": sha, "type": kind, "converter": name,
+          "kwaliteit": status, **extra, "geconverteerd": f"{datetime.now():%Y-%m-%d}"}
+    out.write_text(frontmatter(fm) + text, "utf-8")
+    row.update(converter=name, kwaliteit=status, score=score, tekens=len(text),
+               fout=" | ".join(errors)[:500])
+    return row
 
 
 if __name__ == "__main__":

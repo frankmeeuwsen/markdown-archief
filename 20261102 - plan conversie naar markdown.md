@@ -201,7 +201,21 @@ Uitvoer in de doelmap:
 - de `.md`-bestanden in dezelfde mappenstructuur als de bron;
 - `manifest.csv`: per bestand het type, de converter, de kwaliteit, wat het model deed en eventuele fouten;
 - `_quarantaine.txt`: de bestanden met `slecht`, `leeg` of `mislukt`;
-- bij `--llm-vergelijk` de map `_llm-vergelijking/`.
+- bij `--llm-vergelijk` de map `_llm-vergelijking/`;
+- `_fouten.log`, alleen als er onverwachte fouten waren: per bestand de tijd en de volledige foutmelding.
+
+**Het script stopt nooit door één bestand.** Gaat er bij een bestand iets mis wat niet bij een gewone conversiefout hoort, dan:
+
+- meldt het script dat in de terminal (`FOUT, overgeslagen: ...`);
+- schrijft het de details naar `_fouten.log`;
+- zet het dat bestand als `mislukt` in het manifest en de quarantaine;
+- gaat het door met het volgende bestand.
+
+Aan het eind zie je hoeveel onverwachte fouten er waren. Ook bij Ctrl+C schrijft het script het manifest voor wat al klaar is.
+
+Staat `manifest.csv` nog open in Excel, dan kan Windows hem niet overschrijven. Het script slaat hem dan op als `manifest-<datum-tijd>.csv`.
+
+Echt vastlopen kan nog wel, als een onderliggend programma zelf hangt of crasht, zoals LibreOffice of PyMuPDF bij een heel kapot bestand. Voor de externe programma's geldt een tijdslimiet. Die is 3 minuten voor Pandoc, 5 minuten voor Tesseract en LibreOffice, en 15 minuten voor OCRmyPDF. PyMuPDF heeft geen tijdslimiet.
 
 Opnieuw draaien overschrijft de uitvoer, niet de bron. **Let op:** `.md`-bestanden uit een eerdere run die nu niet meer worden gemaakt, blijven staan. Een overgeslagen audiobestand van een vorige run kan dus nog een oude `.md` hebben. Gebruik voor een schone vergelijking een nieuwe doelmap.
 
